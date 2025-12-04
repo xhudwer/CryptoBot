@@ -1,7 +1,7 @@
-ccxt==4.3.91
-ta==0.10.1
-pandas==2.2.2
-numpy==1.26.4
-xgboost==2.1.1
-scikit-learn==1.5.0
-python-telegram-bot==20.7
+ccxt
+ta
+pandas
+numpy
+xgboost
+scikit-learn
+python-telegram-bot[job-queue]
