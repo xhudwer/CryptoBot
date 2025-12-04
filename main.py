@@ -88,7 +88,7 @@ def train_model(df):
         return None, None
 
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    X_scaled = scaler.fit_transform(X.values)
 
     model = GradientBoostingClassifier(n_estimators=50, random_state=42)
     model.fit(X_scaled, y)
@@ -99,7 +99,7 @@ def train_model(df):
 def predict_signal(model, scaler, last_row):
     feature_cols = ['rsi', 'ema_diff', 'macd', 'vol_ratio', 'atr', 'price_norm', 'hour']
     X = last_row[feature_cols].values.reshape(1, -1)
-    X_scaled = scaler.transform(X)
+    X_scaled = scaler.transform(X.values)
     proba = model.predict_proba(X_scaled)[0][1]
     return proba > 0.75, proba
 
