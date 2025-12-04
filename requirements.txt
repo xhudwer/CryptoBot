@@ -1,4 +1,4 @@
-python-binance==1.0.19
+pybit
 pycoingecko==2.2.0
 pandas==2.2.2
 numpy==1.26.4
