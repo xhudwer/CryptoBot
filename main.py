@@ -6,6 +6,12 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
+def main():
+    # Добавь задержку, если запущено в облаке
+    if os.getenv("RAILWAY_ENVIRONMENT"):
+        logging.info("Ожидание 10 секунд для завершения предыдущего экземпляра...")
+        asyncio.run(asyncio.sleep(10))
+
 # ML
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
