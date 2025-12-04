@@ -33,25 +33,13 @@ price_history = {}
 
 logging.basicConfig(level=logging.INFO)
 
-# === CoinGecko: топ монет по объёму и MC ===
+# === Топ монет пока вручную ===
 def get_top_symbols(limit=15):
-    try:
-        cg = CoinGeckoAPI()
-        coins = cg.get_coins_markets(
-            vs_currency='usd',
-            per_page=limit,
-            order='volume_desc',
-            sparkline=False
-        )
-        symbols = []
-        for c in coins:
-            if (c.get('market_cap', 0) or 0) > 100_000_000 and (c.get('total_volume', 0) or 0) > 20_000_000:
-                sym = c['symbol'].upper() + "USDT"
-                symbols.append(sym)
-        return symbols[:limit]
-    except Exception as e:
-        logging.error(f"CoinGecko error: {e}")
-        return ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+    return [
+        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+        "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "MATICUSDT",
+        "DOTUSDT", "UNIUSDT", "LTCUSDT", "ATOMUSDT", "SHIBUSDT"
+    ][:limit]
 
 # === Генерация признаков для ML ===
 def add_features(df):
