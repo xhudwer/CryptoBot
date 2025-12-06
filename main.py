@@ -7,13 +7,12 @@ from datetime import datetime, timedelta
 from telegram import Bot
 
 # === КОНФИГУРАЦИЯ ===
-TELEGRAM_TOKEN = "8440969823:AAHhS-fhgDG9T9K3tA7tadSWuBTdpBxIeL8"  # ← ЗАМЕНИ НА СВОЙ
-YOUR_CHAT_ID = 5425531321                   # ← ЗАМЕНИ НА СВОЙ
+TELEGRAM_TOKEN ="8440969823:AAHhS-fhgDG9T9K3tA7tadSWuBTdpBxIeL8
+"  # ← ЗАМЕНИ
+YOUR_CHAT_ID = 5425531321                  # ← ЗАМЕНИ
 
-# === КЭШ СИГНАЛОВ ===
 recent_signals = {}
 
-# === СЕКТОРЫ ===
 SECTOR_MAP = {
     "METIS": "Layer 2", "PENDLE": "DeFi", "ONDO": "RWA", "TAO": "AI",
     "RNDR": "AI", "INJ": "DeFi", "POLYX": "RWA", "AKT": "AI",
@@ -23,7 +22,6 @@ SECTOR_MAP = {
     "PEOPLE": "Meme", "JUP": "DeFi", "MNT": "Layer 2", "RENDER": "AI"
 }
 
-# === СПИСОК МОНЕТ (BINANCE ФОРМАТ) ===
 SYMBOLS = [
     "METIS/USDT", "PENDLE/USDT", "ONDO/USDT", "TAO/USDT", "RNDR/USDT",
     "INJ/USDT", "POLYX/USDT", "AKT/USDT", "GALA/USDT", "IMX/USDT",
@@ -32,7 +30,6 @@ SYMBOLS = [
     "JUP/USDT", "MNT/USDT", "RENDER/USDT"
 ]
 
-# === ИМПОРТЫ ===
 from ta.momentum import RSIIndicator
 from ta.trend import MACD, EMAIndicator, ADXIndicator, CCIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
@@ -40,7 +37,6 @@ from ta.volume import MFIIndicator, OnBalanceVolumeIndicator
 from xgboost import XGBClassifier
 from sklearn.preprocessing import StandardScaler
 
-# === ЗАГРУЗКА ДАННЫХ ===
 def fetch_full_history(symbol, interval='15m', max_candles=3000):
     try:
         exchange = ccxt.binance({'enableRateLimit': True})
@@ -55,7 +51,6 @@ def fetch_full_history(symbol, interval='15m', max_candles=3000):
         print(f"Ошибка {symbol}: {e}")
         return None
 
-# === POC (POINT OF CONTROL) ИЗ VOLUME PROFILE ===
 def calculate_poc(df, bins=50):
     min_price = df['low'].min()
     max_price = df['high'].max()
@@ -69,7 +64,6 @@ def calculate_poc(df, bins=50):
     poc_bin = vol_by_bin.idxmax()
     return price_range[poc_bin]
 
-# === MARKET STRUCTURE (HH/HL, LH/LL) ===
 def detect_market_structure(df, window=5):
     highs = df['high'].rolling(window, center=True).max()
     lows = df['low'].rolling(window, center=True).min()
@@ -77,7 +71,6 @@ def detect_market_structure(df, window=5):
     df['is_low'] = (df['low'] == lows)
     return df
 
-# === ПОДДЕРЖКА / СОПРОТИВЛЕНИЕ ===
 def detect_support_resistance(df, window=30):
     lows = df['low'].rolling(window=3, center=True).min()
     highs = df['high'].rolling(window=3, center=True).max()
@@ -91,7 +84,6 @@ def is_near_level(price, levels, threshold=0.005):
             return True
     return False
 
-# === ПРИЗНАКИ ДЛЯ ML ===
 def add_features(df):
     df = df.copy()
     df['rsi'] = RSIIndicator(close=df['close'], window=14).rsi()
@@ -113,14 +105,12 @@ def add_features(df):
     df['hour'] = df['timestamp'].dt.hour
     return df.dropna()
 
-# === ЦЕЛЕВАЯ ПЕРЕМЕННАЯ ===
 def add_target(df, threshold=0.025, future_bars=4):
     df = df.copy()
     df['future_high'] = df['high'].shift(-future_bars)
     df['target'] = (df['future_high'] > df['close'] * (1 + threshold)).astype(int)
     return df.dropna()
 
-# === ОБУЧЕНИЕ МОДЕЛИ ===
 def train_model(df):
     df = add_features(df)
     df = add_target(df)
@@ -134,11 +124,10 @@ def train_model(df):
         return None, None
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    model = XGBClassifier(n_estimators=50, random_state=42, use_label_encoder=False, eval_metric='logloss')
+    model = XGBClassifier(n_estimators=50, random_state=42, eval_metric='logloss')
     model.fit(X_scaled, y)
     return model, scaler
 
-# === ГИБКАЯ ФИЛЬТРАЦИЯ ДУБЛЕЙ ===
 def is_signal_allowed(base, current_price, cooldown_hours=4, price_diff_threshold=0.03):
     now = datetime.now()
     last = recent_signals.get(base)
@@ -163,9 +152,9 @@ def mark_signal_sent(base, price, tp, sl):
         "timestamp": datetime.now()
     }
 
-# === ОСНОВНОЙ ЦИКЛ ===
-async def analyze_and_send():
-    bot = Bot(token=TELEGRAM_TOKEN)
+# === ОСНОВНОЙ ЦИКЛ С УВЕДОМЛЕНИЯМИ ===
+async def analyze_and_send(bot):
+    print("🔍 Сканирование рынка...")
     for sym in SYMBOLS:
         try:
             df = fetch_full_history(sym)
@@ -183,7 +172,6 @@ async def analyze_and_send():
             if vol_24h < 5_000_000:
                 continue
 
-            # === ДОПОЛНИТЕЛЬНЫЙ АНАЛИЗ ===
             poc = calculate_poc(df)
             df = detect_market_structure(df)
             supports, _ = detect_support_resistance(df)
@@ -206,7 +194,6 @@ async def analyze_and_send():
             X_scaled = scaler.transform(X)
             proba = model.predict_proba(X_scaled)[0][1]
 
-            # === УСЛОВИЕ ВХОДА: поддержка + выше POC + ML ===
             if proba > 0.75 and near_support and above_poc:
                 if proba > 0.88:
                     tp_percent = 30
@@ -232,17 +219,19 @@ async def analyze_and_send():
                 )
                 await bot.send_message(chat_id=YOUR_CHAT_ID, text=msg, parse_mode="Markdown")
                 mark_signal_sent(base, current_price, tp, sl)
-                print(f"✅ Сигнал: {base} | Уверенность: {proba:.1%} | TP: +{tp_percent}%")
+                print(f"✅ Сигнал: {base}")
         except Exception as e:
             print(f"❌ Ошибка {sym}: {e}")
         time.sleep(1)
 
-# === ЗАПУСК ===
 async def main():
+    bot = Bot(token=TELEGRAM_TOKEN)
+    # Уведомление о запуске
+    await bot.send_message(chat_id=YOUR_CHAT_ID, text="✅ Бот запущен.\n🔍 Сканирование каждые 15 минут.")
+    print("✅ Бот запущен. Отправлено уведомление в Telegram.")
+
     while True:
-        now = datetime.now().strftime('%Y-%m-%d %H:%M')
-        print(f"\n🕒 [{now}] Запуск анализа...")
-        await analyze_and_send()
+        await analyze_and_send(bot)
         print("💤 Ожидание 15 минут...")
         time.sleep(15 * 60)
 
