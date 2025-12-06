@@ -7,8 +7,7 @@ from datetime import datetime, timedelta
 from telegram import Bot
 
 # === КОНФИГУРАЦИЯ ===
-TELEGRAM_TOKEN ="8440969823:AAHhS-fhgDG9T9K3tA7tadSWuBTdpBxIeL8
-"  # ← ЗАМЕНИ
+TELEGRAM_TOKEN ="8440969823:AAHhS-fhgDG9T9K3tA7tadSWuBTdpBxIeL8"  # ← ЗАМЕНИ
 YOUR_CHAT_ID = 5425531321                  # ← ЗАМЕНИ
 
 recent_signals = {}
