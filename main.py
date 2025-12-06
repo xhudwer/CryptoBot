@@ -3,12 +3,13 @@ import time
 import ccxt
 import pandas as pd
 import numpy as np
+import requests
 from datetime import datetime, timedelta
 from telegram import Bot
 
 # === КОНФИГУРАЦИЯ ===
-TELEGRAM_TOKEN ="8440969823:AAHhS-fhgDG9T9K3tA7tadSWuBTdpBxIeL8"  # ← ЗАМЕНИ
-YOUR_CHAT_ID = 5425531321                  # ← ЗАМЕНИ
+TELEGRAM_TOKEN = "ВАШ_ТОКЕН_ОТ_BOTFATHER"  # ← ЗАМЕНИ
+YOUR_CHAT_ID = 987654321                   # ← ЗАМЕНИ
 
 recent_signals = {}
 
@@ -18,27 +19,40 @@ SECTOR_MAP = {
     "GALA": "Gaming", "IMX": "Gaming", "STRK": "Layer 2",
     "PYTH": "Oracle", "ALT": "AI", "BOME": "Meme", "WLD": "AI",
     "SUI": "Layer 1", "SEI": "Layer 1", "AR": "Storage", "FET": "AI",
-    "PEOPLE": "Meme", "JUP": "DeFi", "MNT": "Layer 2", "RENDER": "AI"
+    "PEOPLE": "Meme", "JUP": "DeFi", "RENDER": "AI"
 }
 
-SYMBOLS = [
-    "METIS/USDT", "PENDLE/USDT", "ONDO/USDT", "TAO/USDT", "RNDR/USDT",
-    "INJ/USDT", "POLYX/USDT", "AKT/USDT", "GALA/USDT", "IMX/USDT",
-    "STRK/USDT", "PYTH/USDT", "ALT/USDT", "BOME/USDT", "WLD/USDT",
-    "SUI/USDT", "SEI/USDT", "AR/USDT", "FET/USDT", "PEOPLE/USDT",
-    "JUP/USDT", "MNT/USDT", "RENDER/USDT"
-]
+DESIRED_BASES = set(SECTOR_MAP.keys())
 
-from ta.momentum import RSIIndicator
-from ta.trend import MACD, EMAIndicator, ADXIndicator, CCIIndicator
-from ta.volatility import BollingerBands, AverageTrueRange
-from ta.volume import MFIIndicator, OnBalanceVolumeIndicator
-from xgboost import XGBClassifier
-from sklearn.preprocessing import StandardScaler
-
-def fetch_full_history(symbol, interval='15m', max_candles=3000):
+# === ЗАГРУЗКА НОВОСТЕЙ ===
+def get_news_sentiment(base):
+    """Возвращает средний сентимент по монете (1.0 = позитив, -1.0 = негатив)"""
     try:
-        exchange = ccxt.binance({'enableRateLimit': True})
+        url = f"https://cryptopanic.com/api/v1/posts/?currencies={base}&public=true&limit=5"
+        resp = requests.get(url, timeout=5)
+        if resp.status_code != 200:
+            return 0.0
+        data = resp.json()
+        if 'results' not in data:
+            return 0.0
+        sentiments = []
+        for post in data['results']:
+            if 'kind' in post:
+                if post['kind'] == 'positive':
+                    sentiments.append(1.0)
+                elif post['kind'] == 'negative':
+                    sentiments.append(-1.0)
+        return np.mean(sentiments) if sentiments else 0.0
+    except:
+        return 0.0
+
+# === ЗАГРУЗКА ДАННЫХ ===
+def fetch_ohlcv(symbol, market_type='spot', interval='15m', max_candles=3000):
+    try:
+        exchange = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {'defaultType': market_type}
+        })
         ohlcv = exchange.fetch_ohlcv(symbol, interval, limit=max_candles)
         if not ohlcv or len(ohlcv) < 100:
             return None
@@ -47,28 +61,48 @@ def fetch_full_history(symbol, interval='15m', max_candles=3000):
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         return df.sort_values("timestamp").reset_index(drop=True)
     except Exception as e:
-        print(f"Ошибка {symbol}: {e}")
+        print(f"Ошибка {symbol} ({market_type}): {e}")
         return None
 
+def get_active_symbols(market_type='spot'):
+    try:
+        exchange = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {'defaultType': market_type}
+        })
+        markets = exchange.load_markets()
+        suffix = 'USDT'
+        if market_type == 'spot':
+            suffix = '/USDT'
+        usdt_pairs = [
+            symbol for symbol in markets.keys()
+            if symbol.endswith(suffix) and markets[symbol]['active']
+        ]
+        if market_type == 'spot':
+            filtered = [sym for sym in usdt_pairs if sym.split('/')[0] in DESIRED_BASES]
+        else:
+            filtered = [sym for sym in usdt_pairs if sym.replace('USDT', '') in DESIRED_BASES]
+        return filtered
+    except:
+        # Резервный список
+        if market_type == 'spot':
+            return [f"{base}/USDT" for base in list(DESIRED_BASES)[:15]]
+        else:
+            return [f"{base}USDT" for base in list(DESIRED_BASES)[:15]]
+
+# === ТЕХАНАЛИЗ ===
 def calculate_poc(df, bins=50):
-    min_price = df['low'].min()
-    max_price = df['high'].max()
-    if min_price == max_price:
+    min_p = df['low'].min()
+    max_p = df['high'].max()
+    if min_p == max_p:
         return df['close'].iloc[-1]
-    price_range = np.linspace(min_price, max_price, bins)
+    price_range = np.linspace(min_p, max_p, bins)
     df['price_bin'] = pd.cut(df['close'], bins=price_range, labels=False, include_lowest=True)
     vol_by_bin = df.groupby('price_bin')['volume'].sum()
     if vol_by_bin.empty:
         return df['close'].iloc[-1]
     poc_bin = vol_by_bin.idxmax()
     return price_range[poc_bin]
-
-def detect_market_structure(df, window=5):
-    highs = df['high'].rolling(window, center=True).max()
-    lows = df['low'].rolling(window, center=True).min()
-    df['is_high'] = (df['high'] == highs)
-    df['is_low'] = (df['low'] == lows)
-    return df
 
 def detect_support_resistance(df, window=30):
     lows = df['low'].rolling(window=3, center=True).min()
@@ -127,107 +161,137 @@ def train_model(df):
     model.fit(X_scaled, y)
     return model, scaler
 
-def is_signal_allowed(base, current_price, cooldown_hours=4, price_diff_threshold=0.03):
+def is_signal_allowed(base, market_type, current_price, cooldown_hours=4):
+    key = f"{base}_{market_type}"
     now = datetime.now()
-    last = recent_signals.get(base)
+    last = recent_signals.get(key)
     if not last:
         return True
     if (now - last["timestamp"]) > timedelta(hours=cooldown_hours):
         return True
-    if current_price > last["last_tp"]:
-        return True
-    if current_price < last["last_sl"]:
+    if current_price > last["last_tp"] or current_price < last["last_sl"]:
         return True
     price_diff = abs(current_price - last["last_price"]) / last["last_price"]
-    if price_diff < price_diff_threshold:
+    if price_diff < 0.03:
         return False
     return True
 
-def mark_signal_sent(base, price, tp, sl):
-    recent_signals[base] = {
+def mark_signal_sent(base, market_type, price, tp, sl):
+    key = f"{base}_{market_type}"
+    recent_signals[key] = {
         "last_price": price,
         "last_tp": tp,
         "last_sl": sl,
         "timestamp": datetime.now()
     }
 
-# === ОСНОВНОЙ ЦИКЛ С УВЕДОМЛЕНИЯМИ ===
+# === ОСНОВНОЙ АНАЛИЗ ===
+async def analyze_pair(symbol, market_type, bot):
+    df = fetch_ohlcv(symbol, market_type)
+    if df is None or len(df) < 200:
+        return
+
+    if market_type == 'spot':
+        base = symbol.split('/')[0]
+    else:
+        base = symbol.replace('USDT', '')
+
+    current_price = df['close'].iloc[-1]
+    if not is_signal_allowed(base, market_type, current_price):
+        return
+
+    sector = SECTOR_MAP.get(base, "Other")
+    vol_24h = df['volume'][-96:].sum()
+    if vol_24h < 5_000_000:
+        return
+
+    # === Анализ ===
+    poc = calculate_poc(df)
+    supports, resistances = detect_support_resistance(df)
+    near_support = is_near_level(current_price, supports)
+    near_resistance = is_near_level(current_price, resistances)
+    rsi = RSIIndicator(close=df['close'], window=14).rsi().iloc[-1]
+    vol_ratio = (df['volume'].iloc[-1] / df['volume'].rolling(20).mean().iloc[-1])
+
+    model, scaler = train_model(df)
+    if model is None:
+        return
+
+    df_feat = add_features(df)
+    if df_feat.empty:
+        return
+
+    last_row = df_feat.iloc[-1]
+    X = last_row[[
+        'rsi', 'macd', 'ema9', 'ema21', 'ema50', 'cci', 'adx', 'mfi', 'obv',
+        'bb_high', 'bb_low', 'atr', 'roc', 'vol_ratio', 'hour'
+    ]].values.reshape(1, -1)
+    X_scaled = scaler.transform(X)
+    proba = model.predict_proba(X_scaled)[0][1]
+
+    # === Новостной сентимент ===
+    sentiment = get_news_sentiment(base)
+    if sentiment > 0.3:
+        proba = min(proba + 0.1, 0.99)  # Boost Long
+    elif sentiment < -0.3:
+        proba = min(proba + 0.1, 0.99)  # Boost Short
+
+    # === Long сигнал ===
+    is_long = (proba > 0.75 and near_support and rsi < 35 and vol_ratio > 1.5)
+    # === Short сигнал ===
+    is_short = (proba > 0.75 and near_resistance and rsi > 70 and vol_ratio > 1.5)
+
+    if is_long or is_short:
+        if proba > 0.88:
+            tp_percent = 30
+        elif proba > 0.82:
+            tp_percent = 20
+        else:
+            tp_percent = 10
+
+        sl_percent = 10
+        if is_long:
+            tp = round(current_price * (1 + tp_percent / 100), 4)
+            sl = round(current_price * (1 - sl_percent / 100), 4)
+            direction_str = "рост"
+            emoji = "🟢"
+        else:
+            tp = round(current_price * (1 - tp_percent / 100), 4)
+            sl = round(current_price * (1 + sl_percent / 100), 4)
+            direction_str = "падение"
+            emoji = "🔴"
+
+        msg = (
+            f"{emoji} **{'LONG' if is_long else 'SHORT'}** | {market_type}\n"
+            f"Монета: {base}USDT\n"
+            f"Сектор: {sector}\n\n"
+            f"📍 Цена: ${current_price:.2f}\n"
+            f"📊 POC: ${poc:.2f} | RSI: {rsi:.1f}\n"
+            f"🧠 Уверенность: {proba:.1%}\n"
+            f"🎯 TP: ${tp} ({'+' if is_long else '-'}{tp_percent}%)\n"
+            f"🛑 SL: ${sl} ({'-' if is_long else '+'}{sl_percent}%)\n"
+            f"🗞️ Новости: {'Позитив' if sentiment > 0.3 else 'Негатив' if sentiment < -0.3 else 'Нейтрал'}\n\n"
+            f"⏱️ Прогноз: {direction_str} в течение 1–4 часов"
+        )
+        await bot.send_message(chat_id=YOUR_CHAT_ID, text=msg, parse_mode="Markdown")
+        mark_signal_sent(base, market_type, current_price, tp, sl)
+        print(f"✅ Сигнал: {base} | {market_type} | {'LONG' if is_long else 'SHORT'}")
+
 async def analyze_and_send(bot):
-    print("🔍 Сканирование рынка...")
-    for sym in SYMBOLS:
-        try:
-            df = fetch_full_history(sym)
-            if df is None or len(df) < 200:
-                continue
-
-            base = sym.split('/')[0]
-            current_price = df['close'].iloc[-1]
-
-            if not is_signal_allowed(base, current_price):
-                continue
-
-            sector = SECTOR_MAP.get(base, "Other")
-            vol_24h = df['volume'][-96:].sum()
-            if vol_24h < 5_000_000:
-                continue
-
-            poc = calculate_poc(df)
-            df = detect_market_structure(df)
-            supports, _ = detect_support_resistance(df)
-            near_support = is_near_level(current_price, supports)
-            above_poc = current_price > poc
-
-            model, scaler = train_model(df)
-            if model is None:
-                continue
-
-            df_feat = add_features(df)
-            if df_feat.empty:
-                continue
-
-            last_row = df_feat.iloc[-1]
-            X = last_row[[
-                'rsi', 'macd', 'ema9', 'ema21', 'ema50', 'cci', 'adx', 'mfi', 'obv',
-                'bb_high', 'bb_low', 'atr', 'roc', 'vol_ratio', 'hour'
-            ]].values.reshape(1, -1)
-            X_scaled = scaler.transform(X)
-            proba = model.predict_proba(X_scaled)[0][1]
-
-            if proba > 0.75 and near_support and above_poc:
-                if proba > 0.88:
-                    tp_percent = 30
-                elif proba > 0.82:
-                    tp_percent = 20
-                else:
-                    tp_percent = 10
-
-                sl_percent = 10
-                tp = round(current_price * (1 + tp_percent / 100), 4)
-                sl = round(current_price * (1 - sl_percent / 100), 4)
-
-                msg = (
-                    f"💎 **АЛМАЗНЫЙ СИГНАЛ**\n"
-                    f"Монета: {base}USDT\n"
-                    f"Сектор: {sector}\n\n"
-                    f"📍 Цена: ${current_price:.2f}\n"
-                    f"📊 POC: ${poc:.2f} | RSI: {last_row['rsi']:.1f}\n"
-                    f"🧠 Уверенность ML: {proba:.1%}\n"
-                    f"🎯 TP: ${tp} (+{tp_percent}%)\n"
-                    f"🛑 SL: ${sl} (-{sl_percent}%)\n\n"
-                    f"⏱️ Прогноз: рост в течение 1–4 часов"
-                )
-                await bot.send_message(chat_id=YOUR_CHAT_ID, text=msg, parse_mode="Markdown")
-                mark_signal_sent(base, current_price, tp, sl)
-                print(f"✅ Сигнал: {base}")
-        except Exception as e:
-            print(f"❌ Ошибка {sym}: {e}")
-        time.sleep(1)
+    print("🔍 Сканирование Spot и Futures...")
+    spot_symbols = get_active_symbols('spot')
+    futures_symbols = get_active_symbols('future')
+    for sym in spot_symbols:
+        await analyze_pair(sym, "Spot", bot)
+        time.sleep(0.5)
+    for sym in futures_symbols:
+        await analyze_pair(sym, "Futures", bot)
+        time.sleep(0.5)
 
 async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
-    # Уведомление о запуске
-    await bot.send_message(chat_id=YOUR_CHAT_ID, text="✅ Бот запущен.\n🔍 Сканирование каждые 15 минут.")
-    print("✅ Бот запущен. Отправлено уведомление в Telegram.")
+    await bot.send_message(chat_id=YOUR_CHAT_ID, text="✅ Бот запущен.\n🔍 Сканирование Spot и Futures каждые 15 минут.")
+    print("✅ Бот запущен.")
 
     while True:
         await analyze_and_send(bot)
