@@ -3,19 +3,20 @@ import ccxt
 import pandas as pd
 import numpy as np
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from telegram import Bot
 
 # === КОНФИГУРАЦИЯ ===
-TELEGRAM_TOKEN = "8440969823:AAHhS-fhgDG9T9K3tA7tadSWuBTdpBxIeL8"  # ← ОБЯЗАТЕЛЬНО ЗАМЕНИ
-YOUR_CHAT_ID = 5425531321                   # ← ОБЯЗАТЕЛЬНО ЗАМЕНИ
+TELEGRAM_TOKEN = "ВАШ_ТОКЕН_ОТ_BOTFATHER"  # ← ОБЯЗАТЕЛЬНО ЗАМЕНИ
+YOUR_CHAT_ID = 987654321                   # ← ОБЯЗАТЕЛЬНО ЗАМЕНИ
 
-# ❌ ЧЁРНЫЙ СПИСОК: исключаем мегакапы (даже если в топе объёма)
+# ❌ ЧЁРНЫЙ СПИСОК: исключаем топовые монеты
 BLACKLIST = {
     "BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "TON", "SHIB",
     "TRX", "DOT", "LTC", "BCH", "LINK", "MATIC", "UNI", "AVAX", "ATOM",
     "XLM", "ETC", "FIL", "APT", "NEAR", "VET", "ICP", "HBAR", "MANA",
-    "SAND", "AXS", "GRT", "ENJ", "CHZ", "THETA", "FTM", "FLOW"
+    "SAND", "AXS", "GRT", "ENJ", "CHZ", "THETA", "FTM", "FLOW", "OP",
+    "ARB", "MKR", "AAVE", "SNX", "CRV", "COMP", "YFI", "LDO"
 }
 
 recent_signals = {}
@@ -30,25 +31,59 @@ from ta.volume import MFIIndicator, OnBalanceVolumeIndicator
 from xgboost import XGBClassifier
 from sklearn.preprocessing import StandardScaler
 
-# === НОВОСТИ: CryptoPanic (бесплатно, без ключа) ===
-def get_news_sentiment(base):
+# === НОВОСТИ: ВОЗВРАЩАЕТ ИНСАЙТЫ (НЕ ОБЯЗАТЕЛЬНЫЕ) ===
+def get_news_insights(base, max_news=2):
+    """
+    Возвращает список инсайтов в формате:
+    [
+        {'label': '[Позитив]', 'title': 'Заголовок...', 'time_ago': '2 ч. назад'},
+        ...
+    ]
+    """
     try:
-        url = f"https://cryptopanic.com/api/v1/posts/?currencies={base}&public=true&limit=3"
+        url = f"https://cryptopanic.com/api/v1/posts/?currencies={base}&public=true&limit=5"
         resp = requests.get(url, timeout=5)
         if resp.status_code != 200:
-            return 0.0
+            return []
         data = resp.json()
-        if 'results' not in   # ← ВОТ ТАК ПРАВИЛЬНО
-            return 0.0
-        sentiments = []
-        for post in data['results']:
-            if post.get('kind') == 'positive':
-                sentiments.append(1.0)
-            elif post.get('kind') == 'negative':
-                sentiments.append(-1.0)
-        return np.mean(sentiments) if sentiments else 0.0
-    except:
-        return 0.0
+        if 'results' not in 
+            return []
+        
+        insights = []
+        for post in data['results'][:max_news]:
+            kind = post.get('kind', 'neutral')
+            label = "[Позитив]" if kind == 'positive' else "[Негатив]" if kind == 'negative' else "[Нейтрал]"
+            
+            # Время публикации
+            created = post.get('created_at')
+            time_ago = ""
+            if created:
+                try:
+                    pub_time = datetime.fromisoformat(created.replace('Z', '+00:00'))
+                    now = datetime.now(timezone.utc)
+                    delta = now - pub_time
+                    hours = int(delta.total_seconds() // 3600)
+                    if hours < 1:
+                        time_ago = "только что"
+                    elif hours < 24:
+                        time_ago = f"{hours} ч. назад"
+                    else:
+                        days = hours // 24
+                        time_ago = f"{days} дн. назад"
+                except:
+                    time_ago = ""
+            
+            title = post.get('title', 'Без заголовка')
+            if len(title) > 60:
+                title = title[:57] + "..."
+            insights.append({
+                'label': label,
+                'title': title,
+                'time_ago': time_ago
+            })
+        return insights
+    except Exception as e:
+        return []
 
 # === ЗАГРУЗКА ФЬЮЧЕРСНЫХ ПАР ===
 def get_futures_symbols():
@@ -68,11 +103,9 @@ def get_futures_symbols():
                 and markets[s].get('type') == 'future'
                 and markets[s]['active']
             ]
-            cached_futures = futures[:60]  # топ-60 по объёму
+            cached_futures = futures[:50]
             last_markets_update = now
-            print(f"✅ Загружено {len(cached_futures)} фьючерсных пар")
-        except Exception as e:
-            print(f"Ошибка загрузки futures: {e}")
+        except:
             cached_futures = ["METISUSDT", "PENDLEUSDT", "ONDOUSDT"]
     return cached_futures
 
@@ -93,7 +126,7 @@ def fetch_ohlcv(symbol, interval='15m'):
     except:
         return None
 
-# === ТЕХАНАЛИЗ: ПОДДЕРЖКА/СОПРОТИВЛЕНИЕ ===
+# === ТЕХАНАЛИЗ ===
 def detect_support_resistance(df, window=20):
     lows = df['low'].rolling(window=3, center=True).min()
     highs = df['high'].rolling(window=3, center=True).max()
@@ -107,7 +140,7 @@ def is_near_level(price, levels, threshold=0.005):
             return True
     return False
 
-# === ML: ГЕНЕРАЦИЯ ПРИЗНАКОВ ===
+# === ML ===
 def add_features(df):
     df = df.copy()
     df['rsi'] = RSIIndicator(close=df['close'], window=14).rsi()
@@ -129,7 +162,6 @@ def add_features(df):
     df['hour'] = df['timestamp'].dt.hour
     return df.dropna()
 
-# === ML: ЦЕЛЕВАЯ ПЕРЕМЕННАЯ И ОБУЧЕНИЕ ===
 def add_target(df, threshold=0.025, future_bars=4):
     df = df.copy()
     df['future_high'] = df['high'].shift(-future_bars)
@@ -163,8 +195,6 @@ def train_and_predict(df):
 # === АНАЛИЗ ОДНОЙ МОНЕТЫ ===
 async def analyze_pair(symbol, bot):
     base = symbol.replace("USDT", "")
-    
-    # ⚠️ ПРОПУСКАЕМ МЕГАКАПЫ
     if base in BLACKLIST:
         return
 
@@ -172,12 +202,10 @@ async def analyze_pair(symbol, bot):
     if df is None:
         return
 
-    # Фильтр по объёму (только ликвидные)
     vol_24h = df['volume'].sum()
     if vol_24h < 10_000_000:
         return
 
-    # Фильтр по дублям
     key = f"{base}_Futures"
     if key in recent_signals:
         last = recent_signals[key]
@@ -186,7 +214,6 @@ async def analyze_pair(symbol, bot):
             if price_diff < 0.03:
                 return
 
-    # Теханализ
     current_price = df['close'].iloc[-1]
     supports, resistances = detect_support_resistance(df)
     near_support = is_near_level(current_price, supports)
@@ -194,26 +221,16 @@ async def analyze_pair(symbol, bot):
     rsi = RSIIndicator(close=df['close'], window=14).rsi().iloc[-1]
     vol_ratio = df['volume'].iloc[-1] / df['volume'].rolling(20).mean().iloc[-1]
 
-    # Быстрая проверка перед ML
-    if not ((near_support and rsi < 35) or (near_resistance and rsi > 70)):
+    if not ((near_support and rsi < 35) or (near_resistance and rsi > 75)):
         return
     if vol_ratio < 1.5:
         return
 
-    # ML
     proba = train_and_predict(df)
     if proba is None or proba < 0.75:
         return
 
-    # Новостной буст
-    sentiment = get_news_sentiment(base)
-    if (near_support and sentiment > 0.3) or (near_resistance and sentiment < -0.3):
-        proba = min(proba + 0.1, 0.99)
-
-    # Направление
     is_long = near_support
-
-    # TP/SL
     if proba > 0.88:
         tp_percent = 30
     elif proba > 0.82:
@@ -230,7 +247,6 @@ async def analyze_pair(symbol, bot):
         sl = round(current_price * 1.10, 4)
         emoji = "🔴"
 
-    # Сохраняем сигнал
     recent_signals[key] = {
         "last_price": current_price,
         "last_tp": tp,
@@ -238,34 +254,44 @@ async def analyze_pair(symbol, bot):
         "timestamp": datetime.now()
     }
 
-    # Отправка
+    # === ФОРМИРОВАНИЕ СООБЩЕНИЯ ===
     msg = (
         f"{emoji} **{'LONG' if is_long else 'SHORT'}** | Futures\n"
         f"Монета: {base}USDT\n"
         f"📍 Цена: ${current_price:.2f}\n"
         f"📊 RSI: {rsi:.1f} | Объём: x{vol_ratio:.1f}\n"
         f"🎯 TP: ${tp} (+{tp_percent}%) | SL: ${sl}\n"
-        f"🧠 Уверенность ML: {proba:.1%}\n"
-        f"🗞️ Новости: {'+' if sentiment > 0.3 else '-' if sentiment < -0.3 else '0'}"
+        f"🧠 Уверенность ML: {proba:.1%}"
     )
+
+    # === ДОБАВЛЯЕМ НОВОСТИ, ЕСЛИ ЕСТЬ ===
+    news_insights = get_news_insights(base, max_news=2)
+    if news_insights:
+        news_lines = ["\n📰 Новости:"]
+        for ni in news_insights:
+            line = f"• {ni['label']} {ni['title']}"
+            if ni['time_ago']:
+                line += f" ({ni['time_ago']})"
+            news_lines.append(line)
+        msg += "\n" + "\n".join(news_lines)
+
     await bot.send_message(chat_id=YOUR_CHAT_ID, text=msg, parse_mode="Markdown")
     print(f"✅ Сигнал: {base} | {'LONG' if is_long else 'SHORT'}")
 
 # === ОСНОВНОЙ ЦИКЛ ===
 async def analyze_and_send(bot):
-    print("🔍 Сканирование непопулярных фьючерсов на Binance...")
+    print("🔍 Сканирование непопулярных фьючерсов...")
     symbols = get_futures_symbols()
     for sym in symbols:
         await analyze_pair(sym, bot)
-        await asyncio.sleep(0.3)  # уважаем лимиты Binance
+        await asyncio.sleep(0.3)
 
-# === ЗАПУСК ===
 async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
     start_time = datetime.now()
     await bot.send_message(
         chat_id=YOUR_CHAT_ID,
-        text=f"✅ Бот запущен ({start_time.strftime('%Y-%m-%d %H:%M')}).\n🔍 Анализ только непопулярных фьючерсов каждые 15 минут."
+        text=f"✅ Бот запущен ({start_time.strftime('%Y-%m-%d %H:%M')}).\n🔍 Анализ непопулярных фьючерсов каждые 15 минут."
     )
     print("✅ Бот запущен.")
 
