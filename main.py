@@ -38,7 +38,7 @@ def get_news_sentiment(base):
         if resp.status_code != 200:
             return 0.0
         data = resp.json()
-        if 'results' not in 
+        if 'results' not in   # ← ВОТ ТАК ПРАВИЛЬНО
             return 0.0
         sentiments = []
         for post in data['results']:
