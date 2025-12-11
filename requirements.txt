@@ -1,7 +1,0 @@
-ccxt
-ta
-pandas
-numpy
-xgboost
-scikit-learn
-python-telegram-bot[job-queue]
